@@ -3,6 +3,11 @@ pragma solidity ^0.8.4;
 import "@openzeppelin/contracts@4.6.0/access/AccessControl.sol";
 import "@openzeppelin/contracts@4.6.0/utils/Counters.sol";
 
+interface ITubeInterface {
+    function getAuthor(uint256 contentId) external returns (address author);
+    function getCreator(uint256 contentId) external returns (address author);
+}
+
 contract TubeComment is AccessControl {
     using Counters for Counters.Counter;
 
@@ -10,22 +15,8 @@ contract TubeComment is AccessControl {
 
     mapping(uint256 => Comment) private comments;
 
-    event CommentNew(
-        uint256 commentId,
-        address admin,
-        
-        uint256 contentType,
-        uint256 contentId,
+    event CommentSet(uint256 commentId, address indexed author, address indexed contractHash, uint256 indexed contentId, uint256 replyId, string content, bool blocked);
 
-        string comment
-    );
-    
-    event CommentUpdate(
-        uint256 commentId,
-
-        string comment
-    );
-    
     modifier onlyOwner() {
         require(
             hasRole(DEFAULT_ADMIN_ROLE, _msgSender()),
@@ -35,50 +26,97 @@ contract TubeComment is AccessControl {
     }
 
     struct Comment {
-        address admin;
-        
-        uint256 contentType;
-        uint256 contentId;
+        address author;
 
-        string comment;
+        address contractHash; // address of the content contract
+        uint256 contentId; // content ID within the contract
+        uint256 replyId; // when not 0 id of the comment within this contract this is a reply to
+
+        string content;
+        // Note: comments have no value thair value is a result of the up /down votes
+        // a user is expected to upovte his own comment with the value he is willing to spent
+
+        bool blocked;
     }
-    
+
     constructor(
     ) {
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
     }
 
-    function createComment(uint256 contentType, uint256 contentId, string memory text) public returns (uint256 commentId) {
+    function createComment(address contractHash, uint256 contentId, uint256 replyId, string memory content) public returns (uint256 commentId) {
+
+        // todo check if user has a profile and optionaly deny posting if not
 
         _countComments.increment();
-        uint256 newCommentId = _countComments.current();
+        commentId = _countComments.current();
 
-        comments[newCommentId] = Comment({
-            admin: _msgSender(),
-        
-            contentType: contentType,
-            contentId : contentId,
+        comments[commentId] = Comment({
+        author: _msgSender(),
 
-            comment : text
+        contractHash: contractHash,
+        contentId : contentId,
+        replyId : replyId,
+
+        content : content,
+
+        blocked : false
         });
 
-        commentId = newCommentId;
-
-        emit CommentNew(newCommentId, _msgSender(), contentType, contentId, text);
+        emit CommentSet(commentId, _msgSender(), contractHash, contentId, replyId, content, false);
     }
 
-    function updateComment(uint256 commentId, string memory comment) public {
-        // todo
+    function blockComment(uint256 commentId, bool set_block) public {
+        Comment memory comment = comments[commentId];
+        // only original content author can moderate comments on chain
+        require(ITubeInterface(comment.contractHash).getAuthor(comment.contentId) == _msgSender());
+
+        comment.blocked = set_block;
+
+        emit CommentSet(commentId, comment.author, comment.contractHash, comment.contentId, comment.replyId, comment.content, set_block);
     }
 
-    function getCommentById(uint256 commentId) public view returns (address admin, uint256 contentType, uint256 contentId, string memory text) {
-        
+    function updateComment(uint256 commentId, string memory content) public {
+
+        Comment memory comment = comments[commentId];
+        require(comment.author == _msgSender());
+
+        comment.content = content;
+
+        comments[commentId] = comment;
+
+        emit CommentSet(commentId, _msgSender(), comment.contractHash, comment.contentId, comment.replyId, content, comment.blocked);
+    }
+
+    function getCommentById(uint256 commentId) public view returns (address author, address contractHash, uint256 contentId, uint256 replyId, string memory content, bool blocked) {
+
         Comment memory comment = comments[commentId];
 
-        admin = comment.admin;
-        contentType = comment.contentType;
+        author = comment.author;
+        contractHash = comment.contractHash;
         contentId = comment.contentId;
-        text = comment.comment;
+        replyId = comment.replyId;
+        content = comment.content;
+        blocked = comment.blocked;
     }
 
+    // @return: returns the author of the comment
+    function getAuthor(uint256 commentId) external returns (address author)
+    {
+        Comment memory comment = comments[commentId];
+
+        author = comment.author;
+    }
+
+    // @return: returns the creator (author) of the content the comment is for
+    function getCreator(uint256 commentId) external returns (address author)
+    {
+        Comment memory comment = comments[commentId];
+
+        author = ITubeInterface(comment.contractHash).getAuthor(comment.contentId);
+    }
+
+    function totalComments() public view returns (uint256 count) {
+        count = _countComments.current();
+    }
 }
